@@ -1,0 +1,112 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - ./redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  faster-whisper:
+    image: lscr.io/linuxserver/faster-whisper:latest
+    container_name: faster-whisper
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - WHISPER_MODEL=small-int8
+      - WHISPER_LANG=en
+      - LOCAL_ONLY=true
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    volumes:
+      - ./faster-whisper-data:/config
+    ports:
+      - "10300:10300"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 10300 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  piper:
+    image: lscr.io/linuxserver/piper:latest
+    container_name: piper
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - PIPER_VOICE=en_US-lessac-medium
+      - PIPER_LENGTH=1.0
+      - PIPER_NOISE=0.667
+      - PIPER_NOISEW=0.333
+      - LOCAL_ONLY=true
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - ./piper-data:/config
+    ports:
+      - "10200:10200"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 10200 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ./ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  voice-api:
+    build:
+      context: ./fastapi-app
+      dockerfile: Dockerfile
+    container_name: voice-api
+    environment:
+      - STT_WHISPER_HOST=faster-whisper
+      - STT_WHISPER_PORT=10300
+      - STT_PIPER_HOST=piper
+      - STT_PIPER_PORT=10200
+      - STT_OLLAMA_HOST=ollama
+      - STT_OLLAMA_PORT=11434
+      - STT_OLLAMA_MODEL=qwen2.5:1.5b
+      - STT_DEFAULT_LANGUAGE=en
+      - STT_REDIS_HOST=redis
+      - STT_REDIS_PORT=6379
+      - STT_SESSION_TTL=600
+    volumes:
+      - ./fastapi-app/app:/code/app  # Hot reload: mount source code
+    ports:
+      - "8000:8000"
+    depends_on:
+      faster-whisper:
+        condition: service_started
+      piper:
+        condition: service_started
+      ollama:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
